@@ -1,64 +1,82 @@
-# EchoMimicV3 on your Windows GPU box — automation plan
+# EchoMimicV3 on a Windows 12 GB GPU box — status & notes
 
-## What this gets you
-EchoMimicV3 (Flash variant) generates a talking-head/talking-body video from one
-reference image + one audio clip, with lip sync and body motion driven by the audio.
-It's the EchoMimic variant Ant Group actually built for ~12GB VRAM cards — V1/V2
-were only validated down to 16GB.
+## What this does
+EchoMimicV3 (Flash variant) turns one reference image + one audio clip into a
+lip-synced, body-animated talking video. Ant Group built the Flash variant for
+~12 GB VRAM cards.
 
-## Step 1 — run the setup script (one time)
-Copy `echomimic_setup.ps1` to the GPU machine and run:
+## Verified working
+- **Box:** Windows 11, RTX 4070 (12 GB VRAM), 16 GB system RAM.
+- **First result:** demo 01 -> 560x1024, 81 frames @ 25 fps, 8 steps,
+  ~3 min of diffusion + ~2 min model load, coherent lip-sync + blinks + arm
+  motion, stable background.
 
+## Setup (one time)
 ```powershell
-powershell -ExecutionPolicy Bypass -File echomimic_setup.ps1
+powershell -ExecutionPolicy Bypass -File scripts\echomimic_setup.ps1
 ```
+Clones `antgroup/echomimic_v3`, builds the `echomimic_v3` conda env, installs a
+**pinned** dependency set (see gotchas), downloads ~24 GB of weights into
+`%USERPROFILE%\EchoMimicV3\models\`, and converts the wav2vec weights to
+safetensors. Needs conda + git + ffmpeg on PATH.
 
-It clones `antgroup/echomimic_v3`, creates a `echomimic_v3` conda env with
-Python 3.10 + CUDA 12.1 PyTorch, installs the repo's `requirements.txt`, and
-pulls the model weights from Hugging Face (several GB — the base
-`Wan2.1-Fun-V1.1-1.3B-InP` DiT model plus `BadToBest/EchoMimicV3` weights).
+| Local path | Source | Provides |
+|---|---|---|
+| `models\Wan2.1-Fun-V1.1-1.3B-InP` | HF `alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP` | VAE, umt5-xxl text encoder, CLIP, tokenizer, base DiT |
+| `models\EchoMimicV3\echomimicv3-flash-pro\diffusion_pytorch_model.safetensors` | HF `BadToBest/EchoMimicV3` | Flash-Pro audio transformer weights |
+| `models\chinese-wav2vec2-base` | HF `TencentGameMate/chinese-wav2vec2-base` | audio encoder |
 
-Prerequisites it assumes are already on that machine: **conda** (Miniconda),
-**git**, and **ffmpeg on PATH**. The script checks for these and tells you what's
-missing.
-
-## Step 2 — confirm the inference entrypoint (I can't verify this remotely)
-This repo moves fast and its exact CLI/config shape wasn't independently
-confirmed. After setup finishes, open the cloned repo
-(`%USERPROFILE%\EchoMimicV3`) and check `README.md` for the current Flash
-inference command — as of this research it was one of:
-
+## Generate a video
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\generate_video.ps1 `
+  -Image face.jpg -Audio speech.wav -Output out.mp4
 ```
-bash run_flash.sh
-```
-or
-```
-python app_mm.py     # Gradio web UI, quantized, fits 12GB
-```
+Defaults to the **low-RAM driver** (`scripts\infer_lowram.py`). Options:
+`-Prompt`, `-Steps` (8 head / 15-25 body), `-VideoLength`, `-SampleSize`,
+`-GuidanceScale`, `-AudioGuidanceScale`, `-WeightDtype float16` (pre-Ampere),
+`-MemMode sequential_cpu_offload` (if 12 GB VRAM is tight),
+`-Driver flash` (upstream path, needs ~24 GB RAM).
 
-Both read image/audio paths from a config file (YAML/JSON under `configs/`)
-rather than pure CLI flags — that's the pattern across all EchoMimic versions.
+## Why a custom low-RAM driver
+Upstream `infer_flash.py` loads text encoder (11.4 GB) + CLIP (4.7 GB) +
+transformer (3 GB) + flash weights (3.7 GB) + VAE all into system RAM *before*
+offloading to GPU — ~23 GB resident, which crashes a 16 GB box mid-load.
 
-## Step 3 — send me the actual config file
-Once you've run setup and can see the real config file (e.g.
-`configs/prompts/*.yaml` or similar), paste its contents back to me — I'll
-write you a one-command wrapper script (`generate_video.ps1 -Image face.jpg
--Audio speech.wav -Output out.mp4`) that patches the config and runs
-inference for you, so from then on it's fully automated on your end.
+`scripts\infer_lowram.py` loads each big module, uses it, and frees it before
+the next: tokenizer+text-encoder -> encode prompt -> free; CLIP -> encode image
+-> free; then transformer + VAE + a stubbed pipeline (`encode_prompt` /
+`clip_image_encoder` monkeypatched to return the precomputed tensors). Peak RAM
+~12 GB. It also fixes the upstream bug below for free.
 
-## Known Windows friction points
-- `xformers` / flash-attention have no official Windows wheels — if pip
-  install fails on those, either skip them (V3 Flash doesn't strictly require
-  xformers) or grab a prebuilt wheel matching your torch/CUDA version from
-  https://github.com/wildminder/AI-windows-whl
-- If native Windows install breaks on a compiled dependency, WSL2 (Ubuntu)
-  + the same conda steps is the fallback most users report success with.
-- Ignore the repo's Windows "one-click installer" — it's distributed only via
-  Baidu Netdisk, which isn't something to trust/run from here.
+## Windows / dependency gotchas (all handled by the scripts)
+- **`--GPU_memory_mode` is dead code in `infer_flash.py`** — parsed, never
+  applied (always `pipeline.to(device)`). `scripts\patch_infer_flash.py` wires
+  it to the pipeline's `enable_*_cpu_offload` (only used by `-Driver flash`).
+- **`requirements.txt` bare lower bounds resolve wrong.** Pinned set that works:
+  `torch==2.5.1+cu121`, `transformers==4.51.3`, `diffusers==0.32.2`,
+  `huggingface_hub==0.30.2`, `tokenizers==0.21.4`.
+  - transformers 5.x removed per-layer hidden states from `Wav2Vec2Encoder`;
+    EchoMimicV3's audio features are `hidden_states[1:]` — hard break.
+  - diffusers 0.40 wants `huggingface_hub` 1.x, incompatible with transformers 4.x.
+  - `pip install -r requirements.txt` pulls a CPU `torch`, clobbering CUDA —
+    reinstalled `--force-reinstall --no-deps` from the cu121 index afterwards.
+- **`pyloudnorm`** is imported but absent from `requirements.txt` — added.
+- **wav2vec `.bin` load blocked** by transformers (CVE-2025-32434) unless
+  torch>=2.6 or safetensors. Setup converts `pytorch_model.bin` ->
+  `model.safetensors` once.
+- **Anaconda channel ToS** now gates `conda create` on defaults — env is built
+  from `conda-forge` (`-c conda-forge --override-channels`).
+- `xformers` / flash-attn: not needed for single-GPU (the `xfuser` imports in
+  `src/dist/__init__.py` are wrapped in try/except).
+- `tensorflow==2.15.0` / `retina-face` from requirements: only used by
+  `app_mm.py`, not by either inference driver. CPU wheels install fine.
 
-## Honesty check on "fully automate"
-I can script the entire environment setup and the run command shape reliably.
-The one piece I can't do sight-unseen is guarantee the *exact* config keys
-EchoMimicV3's current inference script expects, since I don't have a GPU here
-to test against and the repo's docs on that specific point are thin. Step 3
-closes that gap in one round trip once you have the repo cloned.
+## Not done / open
+- Only tested at 768 / 81 frames / 8 steps on demo assets. Longer clips, higher
+  step counts, and non-demo inputs not yet exercised.
+- `model_cpu_offload` (~30 s/step) vs `sequential_cpu_offload` (slower, less
+  VRAM) not benchmarked against each other on this box.
+- The `mmgp`-quantized `app_mm.py` path was not pursued (low-RAM driver made it
+  unnecessary).
+- Pagefile: setup box has a 32 GB system-managed pagefile; a larger fixed one
+  would add headroom for `-Driver flash` but needs an elevated shell + reboot.
