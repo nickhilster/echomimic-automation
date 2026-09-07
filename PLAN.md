@@ -49,6 +49,21 @@ linearly cross-fades the overlap. Ported from upstream `app_mm.py`. Time scales
 re-anchored so it doesn't drift, but per-chunk expression variety is bounded by
 the 81-frame window - raise `-Steps` for more motion at a time cost.
 
+## Controlling head motion
+There's no explicit pose control. Big horizontal head turns (yaw) force the
+model to invent a profile it can't get from a frontal photo, so face detail
+smears. To keep the head frontal (nod / vertical tilt only), combine:
+- a prompt that spells it out ("keeps his head facing forward toward the camera
+  the entire time; only gentle vertical nodding; does not turn his head left or
+  right");
+- `-NegativePrompt "turning head to the side, head rotation, profile view,
+  three-quarter view, side of face, face distortion, loss of facial detail"`
+  (prepended to the driver's hand/finger defaults);
+- `-GuidanceScale 7.5` (up from 6.0) so it adheres harder. Higher still (8.5+)
+  clamps motion more but trends toward stiff.
+Verified: on the Prabhupada 15 s clip this removed the yaw swings v1 had at
+~5-8 s while keeping lip-sync and vertical nods.
+
 ## Why a custom low-RAM driver
 Upstream `infer_flash.py` loads text encoder (11.4 GB) + CLIP (4.7 GB) +
 transformer (3 GB) + flash weights (3.7 GB) + VAE all into system RAM *before*

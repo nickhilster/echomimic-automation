@@ -33,6 +33,7 @@ param(
     [Parameter(Mandatory)] [string] $Audio,
     [string] $Output,
     [string] $Prompt = "A person is speaking.",
+    [string] $NegativePrompt = "",         # extra terms to discourage; blank = driver default (hand/finger artifacts)
     [int]    $Steps = 8,                   # Flash-distilled default; 15-25 for talking body
     [int]    $Seed = 43,
     [int]    $VideoLength = 81,            # total frames = seconds * 25; audio is capped to this
@@ -137,6 +138,10 @@ if ($Driver -eq "lowram") {
         "--num_skip_start_steps", "5",
         "--fps", "25"
     )
+    if ($NegativePrompt) {
+        $inferArgs += @("--negative_prompt",
+            ("Gesture is bad. Bad hands. Bad fingers. Unclear and blurry hands. Fused fingers. " + $NegativePrompt))
+    }
 }
 else {
     # upstream infer_flash.py parses --GPU_memory_mode but never applies it;
