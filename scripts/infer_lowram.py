@@ -42,7 +42,7 @@ from src.wan_image_encoder import CLIPModel
 from src.wan_text_encoder import WanT5EncoderModel
 from src.wan_transformer3d_audio_2512 import WanTransformerAudioMask3DModel as WanTransformer
 from src.pipeline_wan_fun_inpaint_audio_2512 import WanFunInpaintAudioPipeline
-from src.utils import get_image_to_video_latent2, save_videos_grid
+from src.utils import get_image_to_video_latent3, save_videos_grid
 from src.fm_solvers import FlowDPMSolverMultistepScheduler
 from src.fm_solvers_unipc import FlowUniPCMultistepScheduler
 from src.cache_utils import get_teacache_coefficients
@@ -67,6 +67,10 @@ def parse_args():
     p.add_argument("--sampler_name", type=str, default="Flow_Unipc",
                    choices=["Flow", "Flow_Unipc", "Flow_DPM++"])
     p.add_argument("--video_length", type=int, default=81)
+    p.add_argument("--partial_video_length", type=int, default=81,
+                   help="frames per chunk; clips longer than this are generated in overlapping chunks")
+    p.add_argument("--overlap_video_length", type=int, default=8,
+                   help="frames blended between consecutive chunks")
     p.add_argument("--guidance_scale", type=float, default=6.0)
     p.add_argument("--audio_guidance_scale", type=float, default=3.0)
     p.add_argument("--audio_scale", type=float, default=1.0)
@@ -264,8 +268,17 @@ def main():
     # ---- image geometry + clip image ------------------------------------------
     ref_image = Image.open(args.image_path).convert("RGB")
     sample_h, sample_w = get_sample_size(ref_image, args.sample_size)
-    input_video, input_video_mask, clip_image = get_image_to_video_latent2(
-        ref_image, None, video_length=video_length_actual, sample_size=[sample_h, sample_w])
+
+    def _round_tcr(n):
+        return (int((n - 1) // tcr * tcr) + 1) if n != 1 else 1
+
+    partial = _round_tcr(min(args.partial_video_length, video_length_actual))
+    overlap = min(args.overlap_video_length, max(partial - 1, 1))
+
+    # CLIP context comes from the ORIGINAL reference every chunk (identity anchor).
+    _iv, _ivm, clip_image = get_image_to_video_latent3(
+        ref_image, None, video_length=partial, sample_size=[sample_h, sample_w])
+    del _iv, _ivm
 
     # ---- 3. CLIP: load -> encode -> free ------------------------------------
     print("[lowram] loading CLIP image encoder ...", flush=True)
@@ -342,41 +355,89 @@ def main():
                 num_skip_start_steps=args.num_skip_start_steps, offload=args.teacache_offload)
 
     if args.enable_riflex:
-        latent_frames = (video_length_actual - 1) // tcr + 1
-        pipeline.transformer.enable_riflex(k=args.riflex_k, L_test=latent_frames)
+        pipeline.transformer.enable_riflex(k=args.riflex_k, L_test=(partial - 1) // tcr + 1)
 
     generator = torch.Generator(device=device).manual_seed(args.seed)
 
-    print("[lowram] running diffusion ...", flush=True)
-    with torch.no_grad():
-        sample = pipeline(
-            args.prompt,
-            num_frames=video_length_actual,
-            negative_prompt=args.negative_prompt,
-            audio_embeds=audio_embeds,
-            audio_scale=args.audio_scale,
-            ip_mask=None,
-            use_un_ip_mask=False,
-            height=sample_h,
-            width=sample_w,
-            generator=generator,
-            neg_scale=args.neg_scale,
-            neg_steps=args.neg_steps,
-            guidance_scale=args.guidance_scale,
-            audio_guidance_scale=args.audio_guidance_scale,
-            num_inference_steps=args.num_inference_steps,
-            video=input_video,
-            mask_video=input_video_mask,
-            clip_image=clip_image,
-            cfg_skip_ratio=args.cfg_skip_ratio,
-            shift=args.shift,
-        ).videos
+    # ---- 6. chunked diffusion --------------------------------------------
+    # The model's window is ~one chunk; longer clips are generated in
+    # overlapping chunks, each conditioned on the tail frames of the last,
+    # then linearly cross-faded over `overlap` frames (mirrors app_mm.py).
+    n_chunks = 1 + max(0, -(-(video_length_actual - partial) // max(partial - overlap, 1)))
+    print(f"[lowram] chunked gen: {video_length_actual} frames | {partial}/chunk | "
+          f"{overlap} overlap | ~{n_chunks} chunk(s)", flush=True)
+
+    init_frames = 0
+    last_frames = partial
+    new_sample = None
+    rolling = ref_image          # PIL for chunk 0; list[PIL] thereafter
+    cur_partial = partial
+    idx = 0
+    while init_frames < video_length_actual:
+        if last_frames >= video_length_actual:
+            cur_partial = _round_tcr(video_length_actual - init_frames)
+            if cur_partial <= 0:
+                break
+        idx += 1
+        print(f"[lowram] chunk {idx}: frames {init_frames}-{init_frames + cur_partial}", flush=True)
+
+        iv, ivm, _ = get_image_to_video_latent3(
+            rolling, None, video_length=cur_partial, sample_size=[sample_h, sample_w])
+        a_slice = audio_embeds[:, init_frames:init_frames + cur_partial]
+
+        with torch.no_grad():
+            sample = pipeline(
+                args.prompt,
+                num_frames=cur_partial,
+                negative_prompt=args.negative_prompt,
+                audio_embeds=a_slice,
+                audio_scale=args.audio_scale,
+                ip_mask=None,
+                use_un_ip_mask=False,
+                height=sample_h,
+                width=sample_w,
+                generator=generator,
+                neg_scale=args.neg_scale,
+                neg_steps=args.neg_steps,
+                guidance_scale=args.guidance_scale,
+                audio_guidance_scale=args.audio_guidance_scale,
+                num_inference_steps=args.num_inference_steps,
+                video=iv,
+                mask_video=ivm,
+                clip_image=clip_image,
+                cfg_skip_ratio=args.cfg_skip_ratio,
+                shift=args.shift,
+            ).videos
+        sample = sample.float().cpu()
+        free()
+
+        if init_frames != 0:
+            k = min(overlap, sample.shape[2], new_sample.shape[2])
+            mix = torch.tensor([i / overlap for i in range(k)], dtype=sample.dtype).view(1, 1, k, 1, 1)
+            new_sample[:, :, -k:] = new_sample[:, :, -k:] * (1 - mix) + sample[:, :, :k] * mix
+            new_sample = torch.cat([new_sample, sample[:, :, k:]], dim=2)
+        else:
+            new_sample = sample
+
+        if last_frames >= video_length_actual:
+            break
+
+        rolling = [
+            Image.fromarray(
+                (new_sample[0, :, i].permute(1, 2, 0) * 255).clamp(0, 255).byte().numpy())
+            for i in range(-overlap, 0)
+        ]
+        init_frames += cur_partial - overlap
+        last_frames = init_frames + cur_partial
+
+    final_frames = new_sample.shape[2]
+    print(f"[lowram] stitched {final_frames} frames", flush=True)
 
     tmp_video_path = os.path.join(args.save_path, f"{image_name}_tmp.mp4")
-    save_videos_grid(sample[:, :, :video_length_actual], tmp_video_path, fps=args.fps)
+    save_videos_grid(new_sample[:, :, :final_frames], tmp_video_path, fps=args.fps)
 
     video_clip = VideoFileClip(tmp_video_path)
-    audio_clip = audio_clip.subclipped(0, video_length_actual / args.fps)
+    audio_clip = audio_clip.subclipped(0, final_frames / args.fps)
     video_clip = video_clip.with_audio(audio_clip)
     video_clip.write_videofile(output_video_path, codec="libx264", audio_codec="aac", threads=2)
     os.remove(tmp_video_path)

@@ -32,10 +32,22 @@ powershell -ExecutionPolicy Bypass -File scripts\generate_video.ps1 `
   -Image face.jpg -Audio speech.wav -Output out.mp4
 ```
 Defaults to the **low-RAM driver** (`scripts\infer_lowram.py`). Options:
-`-Prompt`, `-Steps` (8 head / 15-25 body), `-VideoLength`, `-SampleSize`,
+`-Prompt`, `-Steps` (8 head / 15-25 body), `-VideoLength` (seconds x 25),
+`-PartialLength` / `-Overlap` (chunking, see below), `-SampleSize`,
 `-GuidanceScale`, `-AudioGuidanceScale`, `-WeightDtype float16` (pre-Ampere),
 `-MemMode sequential_cpu_offload` (if 12 GB VRAM is tight),
 `-Driver flash` (upstream path, needs ~24 GB RAM).
+
+## Long clips: chunked generation
+The model's window is ~one chunk (81 frames / ~3.2 s); past ~138 frames a
+single-shot pass degrades or OOMs. For `-VideoLength` beyond `-PartialLength`,
+`infer_lowram.py` generates overlapping `PartialLength`-frame chunks, each
+conditioned on the tail `Overlap` frames of the previous one (via
+`get_image_to_video_latent3`, which takes a list of continuation frames), then
+linearly cross-fades the overlap. Ported from upstream `app_mm.py`. Time scales
+~linearly per chunk (15 s = 5 chunks ~= 8 min on the 4070). Motion stays
+re-anchored so it doesn't drift, but per-chunk expression variety is bounded by
+the 81-frame window - raise `-Steps` for more motion at a time cost.
 
 ## Why a custom low-RAM driver
 Upstream `infer_flash.py` loads text encoder (11.4 GB) + CLIP (4.7 GB) +

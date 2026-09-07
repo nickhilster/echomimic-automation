@@ -35,7 +35,9 @@ param(
     [string] $Prompt = "A person is speaking.",
     [int]    $Steps = 8,                   # Flash-distilled default; 15-25 for talking body
     [int]    $Seed = 43,
-    [int]    $VideoLength = 81,            # frames; lower (65, 49, ...) to cut VRAM/time
+    [int]    $VideoLength = 81,            # total frames = seconds * 25; audio is capped to this
+    [int]    $PartialLength = 81,          # frames per chunk (lowram driver); clips longer than this generate in chunks
+    [int]    $Overlap = 8,                 # frames cross-faded between chunks
     [int]    $SampleSize = 768,            # square edge in px before aspect fit
     [string] $GuidanceScale = "6.0",      # text CFG  (upstream optimal 3-6)
     [string] $AudioGuidanceScale = "3.0", # audio CFG (upstream run_flash.sh value)
@@ -121,6 +123,8 @@ if ($Driver -eq "lowram") {
         "--num_inference_steps", $Steps,
         "--seed", $Seed,
         "--video_length", $VideoLength,
+        "--partial_video_length", $PartialLength,
+        "--overlap_video_length", $Overlap,
         "--sample_size", $SampleSize, $SampleSize,
         "--sampler_name", "Flow_Unipc",
         "--guidance_scale", $GuidanceScale,

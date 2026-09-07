@@ -31,6 +31,11 @@ powershell -ExecutionPolicy Bypass -File scripts\generate_video.ps1 -Image face.
 Defaults to the low-RAM driver. `-Steps 20` for talking-body clips; see
 [PLAN.md](PLAN.md) for all options.
 
+Clips longer than one model window (~81 frames / ~3.2 s) are generated
+automatically in overlapping chunks and cross-faded. Set total length with
+`-VideoLength` (seconds x 25); tune `-PartialLength` / `-Overlap` if needed.
+Verified: a 15 s clip = five 81-frame chunks, ~8 min on the 4070.
+
 ## Repo layout
 
 - `PLAN.md` — status, the low-RAM driver rationale, every Windows/dependency
