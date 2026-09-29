@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Echomimic Automation — Tracker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#0e0f11; --panel:#17181b; --panel-2:color-mix(in srgb, #17181b 85%, white 8%);
+    --border:color-mix(in srgb, #17181b 70%, white 12%);
+    --text:#e7e8ea; --muted:#9a9ca3; --accent:#5e6ad2;
+    --backlog:#8a8f98; --unstarted:#e2b203; --started:#5e6ad2; --completed:#3fb950; --canceled:#8a8f98;
+    --urgent:#eb5757; --high:#f2994a; --medium:#e2b203; --low:#4d90fe; --none:#5c5e63;
+    --font:-apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text)}
+  header{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5;flex-wrap:wrap}
+  header .logo{height:24px;width:auto}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  header .count{color:var(--muted);font-size:13px}
+  input[type="search"], select{background:var(--panel);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px}
+  input[type="search"]{min-width:220px}
+  .view-toggle{display:flex;gap:6px;margin-left:auto}
+  .view-toggle button{background:var(--panel);border:1px solid var(--border);color:var(--muted);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px}
+  .view-toggle button.active{color:var(--text);border-color:var(--accent)}
+  main{padding:16px 20px}
+  .board{display:flex;gap:12px;overflow-x:auto;align-items:flex-start}
+  .column{background:var(--panel);border-radius:10px;min-width:280px;max-width:300px;flex:1 0 280px;border:1px solid var(--border)}
+  .column-header{display:flex;align-items:center;gap:8px;padding:10px 12px;font-size:13px;font-weight:600;border-bottom:1px solid var(--border)}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .column-body{padding:8px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 160px);overflow-y:auto}
+  .card{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;font-size:13px}
+  .card:hover{border-color:var(--accent)}
+  .card .id{color:var(--muted);font-size:11px;margin-bottom:4px}
+  .card .title{margin-bottom:8px;line-height:1.35}
+  .card .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .badge{font-size:11px;padding:2px 6px;border-radius:4px;background:var(--panel);border:1px solid var(--border);color:var(--muted)}
+  .priority{font-weight:600}
+  .priority.Urgent{color:var(--urgent)} .priority.High{color:var(--high)} .priority.Medium{color:var(--medium)} .priority.Low{color:var(--low)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  table th, table td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+  table tbody tr{cursor:pointer}
+  table tbody tr:hover{background:var(--panel-2)}
+  .hidden{display:none !important}
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;z-index:20}
+  .modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;max-width:720px;width:100%;max-height:85vh;overflow-y:auto;padding:24px}
+  .modal h2{margin-top:0}
+  .modal .close{float:right;background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer}
+  .modal .meta-row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0;font-size:12px;color:var(--muted)}
+  .modal .section-title{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:20px 0 8px}
+  .modal p{line-height:1.5}
+  .modal pre{background:var(--panel-2);padding:10px;border-radius:6px;overflow-x:auto}
+  .modal code{background:var(--panel-2);padding:1px 4px;border-radius:4px}
+  .comment{border-left:2px solid var(--border);padding-left:10px;margin-bottom:14px}
+  .comment .who{font-size:12px;color:var(--muted);margin-bottom:4px}
+  a{color:var(--accent)}
+  .swimlane{margin-bottom:24px;border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .swimlane-header{padding:10px 14px;background:var(--panel);font-weight:600;font-size:14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between}
+  .swimlane-body{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+  .milestone-row{display:flex;align-items:center;gap:12px;font-size:13px}
+  .milestone-row .name{min-width:220px}
+  .milestone-row .date{color:var(--muted);min-width:110px}
+  .progress{flex:1;height:8px;border-radius:4px;background:var(--panel-2);overflow:hidden}
+  .progress-fill{height:100%;background:var(--accent)}
+  .progress-label{min-width:60px;text-align:right;color:var(--muted)}
+  .cycle-row{display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--panel);margin-bottom:10px}
+  .cycle-row .name{min-width:160px;font-weight:600}
+  .cycle-row .dates{min-width:180px;color:var(--muted);font-size:12px}
+  .cycle-row .status-badge{text-transform:capitalize}
+  .reference-list{max-width:960px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+  .reference-entry{background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden;scroll-margin-top:84px}
+  .reference-entry[open]{border-color:color-mix(in srgb, var(--accent) 55%, var(--border))}
+  .reference-entry summary{cursor:pointer;list-style:none;padding:16px 18px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
+  .reference-entry summary::-webkit-details-marker{display:none}
+  .reference-entry summary:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+  .reference-title{font-size:14px;font-weight:650;margin-bottom:4px}
+  .reference-summary{font-size:12px;color:var(--muted);line-height:1.45}
+  .reference-meta{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+  .reference-body{border-top:1px solid var(--border);padding:18px;line-height:1.6;font-size:13px}
+  .reference-body h3,.reference-body h4,.reference-body h5,.reference-body h6{margin:20px 0 8px}
+  .reference-body p{margin:8px 0}
+  .reference-body li{margin:4px 0}
+  .reference-empty{color:var(--muted);text-align:center;padding:48px 20px;border:1px dashed var(--border);border-radius:10px}
+  @media (max-width:760px){
+    header{align-items:stretch}
+    input[type="search"]{min-width:0;width:100%}
+    .view-toggle{margin-left:0;overflow-x:auto;width:100%}
+    .reference-entry summary{grid-template-columns:1fr}
+    .reference-meta{justify-content:flex-start}
+  }
+  footer{padding:20px;text-align:center;color:var(--muted);font-size:11px}
+</style>
+</head>
+<body>
+<header>
+  
+  <h1>Echomimic Automation</h1>
+  <span class="count" id="count"></span>
+  <input type="search" id="search" placeholder="Search issues..." />
+  <select id="priorityFilter"><option value="">All priorities</option></select>
+  <select id="labelFilter"><option value="">All labels</option></select>
+  <div class="view-toggle">
+    <button data-view="board" class="active">Board</button>
+    <button data-view="list">List</button>
+    <button data-view="roadmap">Roadmap</button>
+    <button data-view="cycles">Cycles</button>
+    <button data-view="reference">Reference</button>
+  </div>
+</header>
+<main>
+  <div id="board" class="board"></div>
+  <table id="list" class="hidden">
+    <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Labels</th><th>Updated</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div id="roadmap" class="hidden"></div>
+  <div id="cycles" class="hidden"></div>
+  <section id="reference" class="reference-list hidden" aria-label="Feature reference"></section>
+</main>
+<div id="modalRoot"></div>
+<footer>powered by TrackerBuddy</footer>
+<script>
+const DATA = {"issues":[],"milestones":[],"cycles":[],"initiatives":[],"unassignedMilestones":[],"references":[],"productName":"Echomimic Automation"};
+const ISSUES = DATA.issues;
+const COLUMNS = [
+  {key:'backlog', label:'Backlog', color:'var(--backlog)'},
+  {key:'unstarted', label:'Todo', color:'var(--unstarted)'},
+  {key:'started', label:'In Progress', color:'var(--started)'},
+  {key:'completed', label:'Done', color:'var(--completed)'},
+  {key:'canceled', label:'Canceled', color:'var(--canceled)'},
+];
+
+let state = { search:'', priority:'', label:'', view:'board' };
+
+function allLabels(){
+  const s = new Set();
+  ISSUES.forEach(i => (i.labels||[]).forEach(l => l && s.add(l)));
+  return [...s].sort();
+}
+function allPriorities(){
+  const s = new Set();
+  ISSUES.forEach(i => i.priority && s.add(i.priority));
+  return [...s];
+}
+
+function populateFilters(){
+  const pf = document.getElementById('priorityFilter');
+  allPriorities().forEach(p => { const o=document.createElement('option'); o.value=p; o.textContent=p; pf.appendChild(o); });
+  const lf = document.getElementById('labelFilter');
+  allLabels().forEach(l => { const o=document.createElement('option'); o.value=l; o.textContent=l; lf.appendChild(o); });
+}
+
+function filtered(){
+  return ISSUES.filter(i => {
+    if (state.search) {
+      const q = state.search.toLowerCase();
+      if (!((i.title||'').toLowerCase().includes(q) || (i.id||'').toLowerCase().includes(q))) return false;
+    }
+    if (state.priority && i.priority !== state.priority) return false;
+    if (state.label && !(i.labels||[]).includes(state.label)) return false;
+    return true;
+  });
+}
+
+function filteredReferences(){
+  const q = state.search.trim().toLowerCase();
+  if (!q) return DATA.references;
+  return DATA.references.filter(reference => reference.searchText.includes(q));
+}
+
+function renderBoard(){
+  const root = document.getElementById('board');
+  root.innerHTML = '';
+  const items = filtered();
+  COLUMNS.forEach(col => {
+    const colIssues = items.filter(i => (i.statusType||'').toLowerCase() === col.key);
+    const colEl = document.createElement('div');
+    colEl.className = 'column';
+    colEl.innerHTML = '<div class="column-header"><span class="dot" style="background:' + col.color + '"></span>' + col.label + ' <span style="color:var(--muted);font-weight:400">(' + colIssues.length + ')</span></div><div class="column-body"></div>';
+    const body = colEl.querySelector('.column-body');
+    colIssues.forEach(i => body.appendChild(card(i)));
+    root.appendChild(colEl);
+  });
+}
+
+function card(i){
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.innerHTML = '<div class="id">' + i.id + '</div>' +
+    '<div class="title">' + escapeHtml(i.title||'') + '</div>' +
+    '<div class="meta">' +
+      (i.priority ? '<span class="badge priority ' + i.priority + '">' + i.priority + '</span>' : '') +
+      (i.labels||[]).map(l => '<span class="badge">' + escapeHtml(l) + '</span>').join('') +
+      (i.comments && i.comments.length ? '<span class="badge">💬 ' + i.comments.length + '</span>' : '') +
+    '</div>';
+  el.addEventListener('click', () => openModal(i));
+  return el;
+}
+
+function renderList(){
+  const tbody = document.querySelector('#list tbody');
+  tbody.innerHTML = '';
+  filtered().forEach(i => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + i.id + '</td><td>' + escapeHtml(i.title||'') + '</td><td>' + escapeHtml(i.status||'') + '</td><td>' + escapeHtml(i.priority||'') + '</td><td>' + (i.labels||[]).join(', ') + '</td><td>' + (i.updatedAt ? i.updatedAt.slice(0,10) : '') + '</td>';
+    tr.addEventListener('click', () => openModal(i));
+    tbody.appendChild(tr);
+  });
+}
+
+function progressBar(done, total){
+  const pct = total ? Math.round((done/total)*100) : 0;
+  return '<div class="progress"><div class="progress-fill" style="width:' + pct + '%"></div></div><div class="progress-label">' + done + '/' + total + '</div>';
+}
+
+function renderRoadmap(){
+  const root = document.getElementById('roadmap');
+  root.innerHTML = '';
+  const lanes = [...DATA.initiatives];
+  if (DATA.unassignedMilestones.length) {
+    lanes.push({ slug: '__unassigned', name: 'No initiative', status: '', targetDate: null, milestones: DATA.unassignedMilestones });
+  }
+  if (!lanes.length) {
+    root.innerHTML = '<p style="color:var(--muted)">No initiatives or milestones yet. Create one with "trackerbuddy initiative new" or "trackerbuddy milestone new".</p>';
+    return;
+  }
+  lanes.forEach(lane => {
+    const laneEl = document.createElement('div');
+    laneEl.className = 'swimlane';
+    let rows = lane.milestones.map(m => (
+      '<div class="milestone-row"><div class="name">' + escapeHtml(m.name) + '</div><div class="date">' + (m.targetDate || 'no date') + '</div>' + progressBar(m.done, m.total) + '</div>'
+    )).join('');
+    if (!rows) rows = '<div style="color:var(--muted);font-size:13px">No milestones yet.</div>';
+    laneEl.innerHTML = '<div class="swimlane-header"><span>' + escapeHtml(lane.name) + '</span><span style="color:var(--muted);font-weight:400">' + (lane.targetDate || '') + '</span></div><div class="swimlane-body">' + rows + '</div>';
+    root.appendChild(laneEl);
+  });
+}
+
+function renderCycles(){
+  const root = document.getElementById('cycles');
+  root.innerHTML = '';
+  if (!DATA.cycles.length) {
+    root.innerHTML = '<p style="color:var(--muted)">No cycles yet. Create one with "trackerbuddy cycle new".</p>';
+    return;
+  }
+  DATA.cycles.forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'cycle-row';
+    el.innerHTML = '<div class="name">' + escapeHtml(c.name) + '</div>' +
+      '<div class="dates">' + (c.startDate||'?') + ' → ' + (c.endDate||'?') + '</div>' +
+      '<span class="badge status-badge">' + escapeHtml(c.status||'') + '</span>' +
+      progressBar(c.done, c.total);
+    root.appendChild(el);
+  });
+}
+
+function renderReference(){
+  const root = document.getElementById('reference');
+  const items = filteredReferences();
+  root.innerHTML = '';
+  if (!DATA.references.length) {
+    root.innerHTML = '<div class="reference-empty">No feature references yet. Create one with "trackerbuddy reference new".</div>';
+    return;
+  }
+  if (!items.length) {
+    root.innerHTML = '<div class="reference-empty">No references match this search.</div>';
+    return;
+  }
+  items.forEach(reference => {
+    const details = document.createElement('details');
+    details.className = 'reference-entry';
+    details.id = 'reference-' + reference.slug;
+    const audience = (reference.audience || []).map(item => '<span class="badge">' + escapeHtml(item) + '</span>').join('');
+    details.innerHTML = '<summary><div><div class="reference-title">' + escapeHtml(reference.title) + '</div>' +
+      '<div class="reference-summary">' + escapeHtml(reference.summary || reference.domain) + '</div></div>' +
+      '<div class="reference-meta"><span class="badge">' + escapeHtml(reference.domain) + '</span>' +
+      (reference.restricted ? '<span class="badge">Admin / Restricted</span>' : '') + audience + '</div></summary>' +
+      '<article class="reference-body">' + reference.bodyHtml + '</article>';
+    if (location.hash === '#' + details.id) details.open = true;
+    root.appendChild(details);
+  });
+}
+
+function escapeHtml(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function openModal(i){
+  const root = document.getElementById('modalRoot');
+  const sub = (i.subIssues||[]).map(id => '<li>' + id + '</li>').join('');
+  root.innerHTML = '<div class="overlay" id="overlay"><div class="modal">' +
+    '<button class="close" id="closeModal">×</button>' +
+    '<div class="id">' + i.id + (i.linearUrl ? ' — <a href="' + i.linearUrl + '" target="_blank" rel="noopener">Linear</a>' : '') + '</div>' +
+    '<h2>' + escapeHtml(i.title||'') + '</h2>' +
+    '<div class="meta-row">' +
+      '<span>Status: <strong>' + escapeHtml(i.status||'') + '</strong></span>' +
+      (i.priority ? '<span>Priority: <strong>' + i.priority + '</strong></span>' : '') +
+      (i.assignee ? '<span>Assignee: ' + escapeHtml(i.assignee) + '</span>' : '') +
+      (i.milestone ? '<span>Milestone: ' + escapeHtml(i.milestone) + '</span>' : '') +
+      (i.cycle ? '<span>Cycle: ' + escapeHtml(i.cycle) + '</span>' : '') +
+      (i.parent ? '<span>Parent: ' + i.parent + '</span>' : '') +
+    '</div>' +
+    (i.description ? i.descriptionHtml : '<p style="color:var(--muted)">No description.</p>') +
+    (sub ? '<div class="section-title">Sub-issues</div><ul>' + sub + '</ul>' : '') +
+    (i.comments && i.comments.length ? '<div class="section-title">Comments (' + i.comments.length + ')</div>' + i.comments.map(c => '<div class="comment"><div class="who">' + escapeHtml(c.author) + ' — ' + escapeHtml(c.date) + '</div>' + c.html + '</div>').join('') : '') +
+    '</div></div>';
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+  document.getElementById('overlay').addEventListener('click', e => { if (e.target.id === 'overlay') closeModal(); });
+}
+function closeModal(){ document.getElementById('modalRoot').innerHTML = ''; }
+
+function renderAll(){
+  const viewingReference = state.view === 'reference';
+  document.getElementById('count').textContent = viewingReference
+    ? filteredReferences().length + ' / ' + DATA.references.length + ' references'
+    : filtered().length + ' / ' + ISSUES.length + ' issues';
+  document.getElementById('search').placeholder = viewingReference ? 'Search references...' : 'Search issues...';
+  document.getElementById('priorityFilter').classList.toggle('hidden', viewingReference);
+  document.getElementById('labelFilter').classList.toggle('hidden', viewingReference);
+  document.querySelectorAll('.view-toggle button').forEach(button => {
+    button.classList.toggle('active', button.dataset.view === state.view);
+  });
+  ['board','list','roadmap','cycles','reference'].forEach(v => document.getElementById(v).classList.add('hidden'));
+  document.getElementById(state.view).classList.remove('hidden');
+  if (state.view === 'board') renderBoard();
+  else if (state.view === 'list') renderList();
+  else if (state.view === 'roadmap') renderRoadmap();
+  else if (state.view === 'cycles') renderCycles();
+  else if (state.view === 'reference') renderReference();
+}
+
+document.getElementById('search').addEventListener('input', e => { state.search = e.target.value; renderAll(); });
+document.getElementById('priorityFilter').addEventListener('change', e => { state.priority = e.target.value; renderAll(); });
+document.getElementById('labelFilter').addEventListener('change', e => { state.label = e.target.value; renderAll(); });
+document.querySelectorAll('.view-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.view-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.view = btn.dataset.view;
+    renderAll();
+  });
+});
+
+function applyHashView(){
+  if (location.hash.startsWith('#reference-')) state.view = 'reference';
+  renderAll();
+}
+
+window.addEventListener('hashchange', applyHashView);
+
+populateFilters();
+applyHashView();
+</script>
+</body>
+</html>
