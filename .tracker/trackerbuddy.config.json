@@ -1,0 +1,13 @@
+{
+  "$schema": "./trackerbuddy.config.schema.json",
+  "productName": "Echomimic Automation",
+  "idPrefix": "EA",
+  "theme": {
+    "background": "#0e0f11",
+    "panel": "#17181b",
+    "accent": "#5e6ad2",
+    "font": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Inter, Roboto, sans-serif",
+    "logoPath": null,
+    "wordmark": "Echomimic Automation"
+  }
+}
